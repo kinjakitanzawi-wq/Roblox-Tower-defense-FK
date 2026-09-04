@@ -6,13 +6,13 @@ export type AbilityConfig = {
 	Name: string,
 	Type: string,
 	Cooldown: number,
-	DamageMultiplier: number?,
-
+	CastRange: number?,
 	Radius: number?,
-	ConeAngle: number?,
+	DamageMultiplier: number?,
 	SkyHeight: number?,
 	FallTime: number?,
 	ImpactHoldTime: number?,
+	ConeAngle: number?,
 	VFXDuration: number?,
 	VFXYaw: number?,
 	HitDelay: number?,
@@ -20,11 +20,11 @@ export type AbilityConfig = {
 
 export type UpgradeConfig = {
 	UpgradeCost: number,
-	MaxHealth: number?,
-	Damage: number?,
-	WalkSpeed: number?,
-	Range: number?,
-	BaseDamage: number?,
+	MaxHealth: number,
+	Damage: number,
+	WalkSpeed: number,
+	Range: number,
+	BaseDamage: number,
 }
 
 export type AllyConfig = {
@@ -33,38 +33,33 @@ export type AllyConfig = {
 	WalkSpeed: number,
 	Range: number,
 	BaseDamage: number,
-
 	Cost: number,
 	DeployCooldown: number,
 	DeployLimit: number,
-
 	Scale: number,
 	MaxLevel: number,
-
-	AttackEnabled: boolean,
-
-	Abilities: { AbilityConfig },
-	Upgrades: { [number]: UpgradeConfig },
+	AttackEnabled: boolean?,
+	AttackCooldown: number?,
+	Abilities: {AbilityConfig},
+	Upgrades: {[number]: UpgradeConfig},
 }
 
 export type EnemyConfig = {
 	MaxHealth: number,
 	Damage: number,
 	AttackCooldown: number,
-
 	WalkSpeed: number,
 	Range: number,
 	BaseDamage: number,
-
 	Scale: number,
 	KillReward: number,
 }
 
-UnitConfig.AbilityTypes = table.freeze({
+UnitConfig.AbilityTypes = {
 	TargetAOE = "TARGET_AOE",
 	SkyDrop = "SKY_DROP",
 	Cone = "CONE",
-})
+}
 
 UnitConfig.Allies = {
 	Natsu = {
@@ -80,17 +75,15 @@ UnitConfig.Allies = {
 
 		Scale = 0.60,
 		MaxLevel = 3,
-
 		AttackEnabled = false,
 
 		Abilities = {
 			{
 				Name = "FlameBurst",
 				Type = UnitConfig.AbilityTypes.TargetAOE,
-
 				Cooldown = 1.2,
 				Radius = 4,
-				DamageMultiplier = 1.0,
+				DamageMultiplier = 1,
 			},
 		},
 
@@ -113,7 +106,7 @@ UnitConfig.Allies = {
 				BaseDamage = 325,
 			},
 		},
-	} :: AllyConfig,
+	},
 
 	Gojo = {
 		MaxHealth = 450,
@@ -128,18 +121,15 @@ UnitConfig.Allies = {
 
 		Scale = 0.60,
 		MaxLevel = 3,
-
 		AttackEnabled = false,
 
 		Abilities = {
 			{
 				Name = "BlueBlast",
 				Type = UnitConfig.AbilityTypes.SkyDrop,
-
 				Cooldown = 1.8,
 				Radius = 6,
-				DamageMultiplier = 1.0,
-
+				DamageMultiplier = 1,
 				SkyHeight = 30,
 				FallTime = 0.65,
 				ImpactHoldTime = 0.15,
@@ -165,7 +155,7 @@ UnitConfig.Allies = {
 				BaseDamage = 420,
 			},
 		},
-	} :: AllyConfig,
+	},
 
 	Madara = {
 		MaxHealth = 800,
@@ -180,19 +170,16 @@ UnitConfig.Allies = {
 
 		Scale = 0.40,
 		MaxLevel = 3,
-
 		AttackEnabled = false,
 
 		Abilities = {
 			{
 				Name = "GreatFire",
 				Type = UnitConfig.AbilityTypes.Cone,
-
 				Cooldown = 2.5,
 				ConeAngle = 40,
-				DamageMultiplier = 1.0,
-
-				VFXDuration = 1.0,
+				DamageMultiplier = 1,
+				VFXDuration = 1,
 				VFXYaw = 180,
 				HitDelay = 0.25,
 			},
@@ -217,62 +204,54 @@ UnitConfig.Allies = {
 				BaseDamage = 650,
 			},
 		},
-	} :: AllyConfig,
-}
+	},
+} :: {[string]: AllyConfig}
 
 UnitConfig.Enemies = {
 	Bandit = {
 		MaxHealth = 450,
 		Damage = 55,
 		AttackCooldown = 1.4,
-
 		WalkSpeed = 8,
 		Range = 6,
 		BaseDamage = 150,
-
 		Scale = 0.60,
 		KillReward = 60,
-	} :: EnemyConfig,
+	},
 
 	FastBandit = {
 		MaxHealth = 280,
 		Damage = 35,
-		AttackCooldown = 1.0,
-
+		AttackCooldown = 1,
 		WalkSpeed = 14,
 		Range = 6,
 		BaseDamage = 120,
-
 		Scale = 0.55,
 		KillReward = 75,
-	} :: EnemyConfig,
+	},
 
 	TankBandit = {
 		MaxHealth = 1500,
 		Damage = 100,
 		AttackCooldown = 1.8,
-
 		WalkSpeed = 5,
 		Range = 6,
 		BaseDamage = 350,
-
 		Scale = 0.70,
 		KillReward = 180,
-	} :: EnemyConfig,
+	},
 
 	BossBandit = {
 		MaxHealth = 5000,
 		Damage = 180,
 		AttackCooldown = 1.5,
-
 		WalkSpeed = 6,
 		Range = 7,
 		BaseDamage = 800,
-
 		Scale = 0.75,
 		KillReward = 1000,
-	} :: EnemyConfig,
-}
+	},
+} :: {[string]: EnemyConfig}
 
 function UnitConfig.GetAlly(name: string): AllyConfig?
 	return UnitConfig.Allies[name]
@@ -299,7 +278,7 @@ function UnitConfig.GetAbility(unitName: string, abilityName: string): AbilityCo
 		return nil
 	end
 
-	for _, ability in unit.Abilities do
+	for _, ability in ipairs(unit.Abilities) do
 		if ability.Name == abilityName then
 			return ability
 		end
@@ -309,46 +288,58 @@ function UnitConfig.GetAbility(unitName: string, abilityName: string): AbilityCo
 end
 
 function UnitConfig.IsValidAbilityType(abilityType: string): boolean
-	for _, validType in UnitConfig.AbilityTypes do
-		if validType == abilityType then
-			return true
-		end
-	end
-
-	return false
+	return abilityType == UnitConfig.AbilityTypes.TargetAOE
+		or abilityType == UnitConfig.AbilityTypes.SkyDrop
+		or abilityType == UnitConfig.AbilityTypes.Cone
 end
 
 function UnitConfig.Validate()
-	for unitName, unit in UnitConfig.Allies do
-		assert(unit.MaxHealth > 0, unitName .. " has invalid MaxHealth")
-		assert(unit.Damage >= 0, unitName .. " has invalid Damage")
-		assert(unit.Range > 0, unitName .. " has invalid Range")
-		assert(unit.Cost >= 0, unitName .. " has invalid Cost")
-		assert(unit.DeployLimit > 0, unitName .. " has invalid DeployLimit")
-		assert(unit.MaxLevel >= 1, unitName .. " has invalid MaxLevel")
+	for unitName, unit in pairs(UnitConfig.Allies) do
+		assert(unit.MaxHealth > 0, `{unitName}: invalid MaxHealth`)
+		assert(unit.Damage >= 0, `{unitName}: invalid Damage`)
+		assert(unit.Range > 0, `{unitName}: invalid Range`)
+		assert(unit.Cost >= 0, `{unitName}: invalid Cost`)
+		assert(unit.DeployLimit > 0, `{unitName}: invalid DeployLimit`)
 
-		for _, ability in unit.Abilities do
+		for _, ability in ipairs(unit.Abilities) do
 			assert(
 				UnitConfig.IsValidAbilityType(ability.Type),
-				unitName .. " has an invalid ability type: " .. ability.Type
+				`{unitName}: invalid ability type {ability.Type}`
 			)
 
-			assert(ability.Cooldown >= 0, ability.Name .. " has invalid Cooldown")
+			assert(ability.Cooldown >= 0, `{unitName}: invalid ability cooldown`)
 		end
 	end
 
-	for enemyName, enemy in UnitConfig.Enemies do
-		assert(enemy.MaxHealth > 0, enemyName .. " has invalid MaxHealth")
-		assert(enemy.Damage >= 0, enemyName .. " has invalid Damage")
-		assert(enemy.WalkSpeed > 0, enemyName .. " has invalid WalkSpeed")
-		assert(enemy.KillReward >= 0, enemyName .. " has invalid KillReward")
+	for enemyName, enemy in pairs(UnitConfig.Enemies) do
+		assert(enemy.MaxHealth > 0, `{enemyName}: invalid MaxHealth`)
+		assert(enemy.WalkSpeed >= 0, `{enemyName}: invalid WalkSpeed`)
+		assert(enemy.AttackCooldown >= 0, `{enemyName}: invalid AttackCooldown`)
 	end
 end
 
 UnitConfig.Validate()
 
+for _, unit in pairs(UnitConfig.Allies) do
+	for _, ability in ipairs(unit.Abilities) do
+		table.freeze(ability)
+	end
+
+	for _, upgrade in pairs(unit.Upgrades) do
+		table.freeze(upgrade)
+	end
+
+	table.freeze(unit.Abilities)
+	table.freeze(unit.Upgrades)
+	table.freeze(unit)
+end
+
+for _, enemy in pairs(UnitConfig.Enemies) do
+	table.freeze(enemy)
+end
+
 table.freeze(UnitConfig.AbilityTypes)
 table.freeze(UnitConfig.Allies)
 table.freeze(UnitConfig.Enemies)
 
-return UnitConfig
+return table.freeze(UnitConfig)
