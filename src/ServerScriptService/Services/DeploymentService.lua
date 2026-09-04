@@ -14,29 +14,36 @@ local DeploymentService = {}
 local unitsFolder = workspace:WaitForChild("Units")
 local alliesFolder = unitsFolder:WaitForChild("Allies")
 
-local deployEvent = ReplicatedStorage:FindFirstChild("DeployUnitEvent")
+local deployInstance = ReplicatedStorage:FindFirstChild("DeployUnitEvent")
 
-if not deployEvent then
-	deployEvent = Instance.new("RemoteEvent")
-	deployEvent.Name = "DeployUnitEvent"
-	deployEvent.Parent = ReplicatedStorage
+if not deployInstance then
+	deployInstance = Instance.new("RemoteEvent")
+	deployInstance.Name = "DeployUnitEvent"
+	deployInstance.Parent = ReplicatedStorage
 end
 
-local playerCooldowns: {
-	[Player]: { [string]: number }
+assert(deployInstance:IsA("RemoteEvent"), "DeployUnitEvent must be a RemoteEvent")
+
+local deployEvent = deployInstance :: RemoteEvent
+
+local cooldownsByPlayer: {
+	[Player]: {[string]: number}
 } = {}
 
 local spawnHandler: ((string, Player) -> boolean)? = nil
+local matchEndedChecker: (() -> boolean)? = nil
 
-local function countOwnedUnits(
-	player: Player,
-	unitName: string
-): number
+local initialized = false
+
+local function isMatchEnded(): boolean
+	return matchEndedChecker ~= nil and matchEndedChecker()
+end
+
+local function countOwnedUnits(player: Player, unitName: string): number
 	local count = 0
 
 	for _, unit in ipairs(alliesFolder:GetChildren()) do
-		if
-			unit.Name == unitName
+		if unit.Name == unitName
 			and unit:GetAttribute("OwnerUserId") == player.UserId
 		then
 			count += 1
@@ -46,238 +53,183 @@ local function countOwnedUnits(
 	return count
 end
 
-local function updateDeployCount(
-	player: Player,
-	unitName: string
-)
-	local config = UnitConfig.Allies[unitName]
+local function updateDeployCount(player: Player, unitName: string)
+	local config = UnitConfig.GetAlly(unitName)
 
 	if not config then
 		return
 	end
 
-	local deployed = countOwnedUnits(
-		player,
-		unitName
+	player:SetAttribute(
+		`{unitName}Deployed`,
+		countOwnedUnits(player, unitName)
 	)
 
 	player:SetAttribute(
-		unitName .. "Deployed",
-		deployed
-	)
-
-	player:SetAttribute(
-		unitName .. "DeployLimit",
+		`{unitName}DeployLimit`,
 		config.DeployLimit
 	)
 end
 
-local function updateAllDeployCounts(
-	player: Player
-)
+local function updateAllDeployCounts(player: Player)
 	for unitName in pairs(UnitConfig.Allies) do
-		updateDeployCount(
-			player,
-			unitName
-		)
+		updateDeployCount(player, unitName)
 	end
 end
 
-local function getCooldownTable(
-	player: Player
-): { [string]: number }
-	local cooldowns = playerCooldowns[player]
+local function getCooldowns(player: Player): {[string]: number}
+	local playerCooldowns = cooldownsByPlayer[player]
 
-	if cooldowns then
-		return cooldowns
+	if not playerCooldowns then
+		playerCooldowns = {}
+		cooldownsByPlayer[player] = playerCooldowns
 	end
 
-	cooldowns = {}
-	playerCooldowns[player] = cooldowns
-
-	return cooldowns
+	return playerCooldowns
 end
 
 local function canDeploy(
 	player: Player,
-	unitName: string
-): (boolean, any)
-	if typeof(unitName) ~= "string" then
-		return false, nil
+	unitName: unknown
+): (boolean, string?)
+
+	if isMatchEnded() then
+		return false, "MATCH_ENDED"
 	end
 
-	local config = UnitConfig.Allies[unitName]
+	if typeof(unitName) ~= "string" then
+		return false, "INVALID_UNIT"
+	end
+
+	local config = UnitConfig.GetAlly(unitName)
 
 	if not config then
-		return false, nil
+		return false, "UNKNOWN_UNIT"
 	end
 
-	local deployed = countOwnedUnits(
-		player,
-		unitName
-	)
-
-	if deployed >= config.DeployLimit then
-		updateDeployCount(
-			player,
-			unitName
-		)
-
-		return false, config
+	if countOwnedUnits(player, unitName) >= config.DeployLimit then
+		return false, "DEPLOY_LIMIT"
 	end
 
-	local energy =
-		player:GetAttribute("Energy")
-		or 0
+	local energyAttribute = player:GetAttribute("Energy")
+	local energy = if typeof(energyAttribute) == "number" then energyAttribute else 0
 
 	if energy < config.Cost then
-		return false, config
+		return false, "NOT_ENOUGH_ENERGY"
 	end
 
-	local cooldowns =
-		getCooldownTable(player)
+	local lastDeploy = getCooldowns(player)[unitName] or 0
+	local now = workspace:GetServerTimeNow()
 
-	local lastDeploy =
-		cooldowns[unitName]
-		or 0
-
-	local now =
-		workspace:GetServerTimeNow()
-
-	if
-		now - lastDeploy
-		< config.DeployCooldown
-	then
-		return false, config
+	if now - lastDeploy < config.DeployCooldown then
+		return false, "COOLDOWN"
 	end
 
-	return true, config
+	return true, nil
 end
 
-function DeploymentService.SetSpawnHandler(
-	handler: (string, Player) -> boolean
-)
+function DeploymentService.SetSpawnHandler(handler: (string, Player) -> boolean)
 	spawnHandler = handler
+end
+
+function DeploymentService.SetMatchEndedChecker(checker: () -> boolean)
+	matchEndedChecker = checker
 end
 
 function DeploymentService.TryDeploy(
 	player: Player,
-	unitName: string
-): boolean
-	local allowed, config =
-		canDeploy(
-			player,
-			unitName
-		)
+	unitName: unknown
+): (boolean, string?)
 
-	if not allowed or not config then
-		return false
+	local allowed, reason = canDeploy(player, unitName)
+
+	if not allowed then
+		return false, reason
+	end
+
+	if typeof(unitName) ~= "string" then
+		return false, "INVALID_UNIT"
+	end
+
+	local config = UnitConfig.GetAlly(unitName)
+
+	if not config then
+		return false, "UNKNOWN_UNIT"
 	end
 
 	if not spawnHandler then
-		warn(
-			"[DeploymentService] Spawn handler has not been registered"
-		)
-
-		return false
+		warn("[DeploymentService] Spawn handler has not been configured")
+		return false, "SPAWN_UNAVAILABLE"
 	end
 
-	local spawned =
-		spawnHandler(
-			unitName,
-			player
-		)
-
-	if not spawned then
-		return false
+	if isMatchEnded() then
+		return false, "MATCH_ENDED"
 	end
 
-	local energy =
-		player:GetAttribute("Energy")
-		or 0
+	if not spawnHandler(unitName, player) then
+		return false, "SPAWN_FAILED"
+	end
 
-	player:SetAttribute(
-		"Energy",
-		math.max(
-			0,
-			energy - config.Cost
-		)
-	)
+	local energyAttribute = player:GetAttribute("Energy")
+	local energy = if typeof(energyAttribute) == "number" then energyAttribute else 0
 
-	local cooldowns =
-		getCooldownTable(player)
+	player:SetAttribute("Energy", math.max(0, energy - config.Cost))
 
-	cooldowns[unitName] =
-		workspace:GetServerTimeNow()
+	getCooldowns(player)[unitName] = workspace:GetServerTimeNow()
 
-	updateDeployCount(
-		player,
-		unitName
-	)
+	updateDeployCount(player, unitName)
 
-	return true
+	return true, nil
 end
 
 function DeploymentService.Init()
-	for _, player in ipairs(
-		Players:GetPlayers()
-	) do
+	if initialized then
+		return
+	end
+
+	initialized = true
+
+	for _, player in ipairs(Players:GetPlayers()) do
 		updateAllDeployCounts(player)
 	end
 
-	Players.PlayerAdded:Connect(
-		function(player)
-			updateAllDeployCounts(player)
-		end
-	)
+	Players.PlayerAdded:Connect(updateAllDeployCounts)
 
-	Players.PlayerRemoving:Connect(
-		function(player)
-			playerCooldowns[player] = nil
-		end
-	)
+	Players.PlayerRemoving:Connect(function(player)
+		cooldownsByPlayer[player] = nil
+	end)
 
-	alliesFolder.ChildAdded:Connect(
-		function()
-			for _, player in ipairs(
-				Players:GetPlayers()
-			) do
-				task.defer(
-					updateAllDeployCounts,
-					player
-				)
-			end
-		end
-	)
+	alliesFolder.ChildAdded:Connect(function(unit)
+		local ownerUserId = unit:GetAttribute("OwnerUserId")
 
-	alliesFolder.ChildRemoved:Connect(
-		function()
-			for _, player in ipairs(
-				Players:GetPlayers()
-			) do
-				task.defer(
-					updateAllDeployCounts,
-					player
-				)
-			end
+		if typeof(ownerUserId) ~= "number" then
+			return
 		end
-	)
 
-	deployEvent.OnServerEvent:Connect(
-		function(
-			player,
-			unitName
-		)
-			if typeof(unitName) ~= "string" then
-				return
-			end
+		local player = Players:GetPlayerByUserId(ownerUserId)
 
-			DeploymentService.TryDeploy(
-				player,
-				unitName
-			)
+		if player then
+			updateDeployCount(player, unit.Name)
 		end
-	)
+	end)
+
+	alliesFolder.ChildRemoved:Connect(function(unit)
+		local ownerUserId = unit:GetAttribute("OwnerUserId")
+
+		if typeof(ownerUserId) ~= "number" then
+			return
+		end
+
+		local player = Players:GetPlayerByUserId(ownerUserId)
+
+		if player then
+			task.defer(updateDeployCount, player, unit.Name)
+		end
+	end)
+
+	deployEvent.OnServerEvent:Connect(function(player, unitName)
+		DeploymentService.TryDeploy(player, unitName)
+	end)
 end
 
 return DeploymentService
