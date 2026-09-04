@@ -8,6 +8,8 @@ local UnitConfig = require(
 		:WaitForChild("UnitConfig")
 )
 
+type AbilityConfig = UnitConfig.AbilityConfig
+
 local AbilityService = {}
 
 local THINK_RATE = 0.10
@@ -16,37 +18,43 @@ local unitsFolder = workspace:WaitForChild("Units")
 local alliesFolder = unitsFolder:WaitForChild("Allies")
 local enemiesFolder = unitsFolder:WaitForChild("Enemies")
 
-local vfxEvent = ReplicatedStorage:FindFirstChild("PlayUnitVFX")
+local vfxInstance = ReplicatedStorage:FindFirstChild("PlayUnitVFX")
 
-if not vfxEvent then
-	vfxEvent = Instance.new("RemoteEvent")
-	vfxEvent.Name = "PlayUnitVFX"
-	vfxEvent.Parent = ReplicatedStorage
+if not vfxInstance then
+	vfxInstance = Instance.new("RemoteEvent")
+	vfxInstance.Name = "PlayUnitVFX"
+	vfxInstance.Parent = ReplicatedStorage
 end
 
-local registeredUnits = {}
+assert(vfxInstance:IsA("RemoteEvent"), "PlayUnitVFX must be a RemoteEvent")
 
-local function getHumanoid(unit)
-	if not unit then
-		return nil
-	end
+local vfxEvent = vfxInstance :: RemoteEvent
 
+local registeredUnits: {[Model]: boolean} = {}
+local matchEndedChecker: (() -> boolean)? = nil
+
+local castGeneration = 0
+local initialized = false
+
+local function isMatchEnded(): boolean
+	return matchEndedChecker ~= nil and matchEndedChecker()
+end
+
+local function getHumanoid(unit: Model): Humanoid?
 	return unit:FindFirstChildWhichIsA("Humanoid", true)
 end
 
-local function getRoot(unit)
-	if not unit then
-		return nil
+local function getRoot(unit: Model): BasePart?
+	local root = unit:FindFirstChild("HumanoidRootPart", true)
+
+	if root and root:IsA("BasePart") then
+		return root
 	end
 
-	return unit:FindFirstChild("HumanoidRootPart", true)
+	return nil
 end
 
-local function isEnemyAlive(enemy)
-	if not enemy or not enemy.Parent then
-		return false
-	end
-
+local function isEnemyAlive(enemy: Model): boolean
 	local humanoid = getHumanoid(enemy)
 	local root = getRoot(enemy)
 
@@ -55,7 +63,7 @@ local function isEnemyAlive(enemy)
 		and humanoid.Health > 0
 end
 
-local function faceTarget(unit, target)
+local function faceTarget(unit: Model, target: Model)
 	local root = getRoot(unit)
 	local targetRoot = getRoot(target)
 
@@ -73,187 +81,156 @@ local function faceTarget(unit, target)
 		return
 	end
 
-	root.CFrame = CFrame.lookAt(
-		root.Position,
-		lookPosition
-	)
+	root.CFrame = CFrame.lookAt(root.Position, lookPosition)
 end
 
-local function findNearestEnemy(position, maxRange)
-	local nearestEnemy = nil
+local function findNearestEnemy(position: Vector3, maxRange: number): Model?
+	local nearest: Model? = nil
 	local nearestDistance = math.huge
 
-	for _, enemy in ipairs(enemiesFolder:GetChildren()) do
-		if not isEnemyAlive(enemy) then
+	for _, instance in ipairs(enemiesFolder:GetChildren()) do
+		if not instance:IsA("Model") or not isEnemyAlive(instance) then
 			continue
 		end
 
-		local root = getRoot(enemy)
+		local root = getRoot(instance)
 
 		if not root then
 			continue
 		end
 
-		local distance = (
-			root.Position - position
-		).Magnitude
+		local distance = (root.Position - position).Magnitude
 
 		if distance <= maxRange and distance < nearestDistance then
-			nearestEnemy = enemy
+			nearest = instance
 			nearestDistance = distance
 		end
 	end
 
-	return nearestEnemy
+	return nearest
 end
 
-local function getEnemiesInRadius(position, radius)
-	local result = {}
+local function getEnemiesInRadius(position: Vector3, radius: number): {Model}
+	local enemies: {Model} = {}
 
-	for _, enemy in ipairs(enemiesFolder:GetChildren()) do
-		if not isEnemyAlive(enemy) then
+	for _, instance in ipairs(enemiesFolder:GetChildren()) do
+		if not instance:IsA("Model") or not isEnemyAlive(instance) then
 			continue
 		end
 
-		local root = getRoot(enemy)
+		local root = getRoot(instance)
 
-		if not root then
-			continue
-		end
-
-		local distance = (
-			root.Position - position
-		).Magnitude
-
-		if distance <= radius then
-			table.insert(result, enemy)
+		if root and (root.Position - position).Magnitude <= radius then
+			table.insert(enemies, instance)
 		end
 	end
 
-	return result
+	return enemies
 end
 
 local function getEnemiesInCone(
-	origin,
-	direction,
-	range,
-	coneAngle
-)
-	local result = {}
+	position: Vector3,
+	direction: Vector3,
+	maxRange: number,
+	coneAngle: number
+): {Model}
 
-	local flatDirection = Vector3.new(
-		direction.X,
-		0,
-		direction.Z
-	)
+	local enemies: {Model} = {}
 
-	if flatDirection.Magnitude <= 0.01 then
-		return result
+	local flatDirection = Vector3.new(direction.X, 0, direction.Z)
+
+	if flatDirection.Magnitude <= 0.001 then
+		return enemies
 	end
 
-	flatDirection = flatDirection.Unit
+	local forward = flatDirection.Unit
+	local minimumDot = math.cos(math.rad(coneAngle * 0.5))
 
-	local minimumDot = math.cos(
-		math.rad(coneAngle * 0.5)
-	)
-
-	for _, enemy in ipairs(enemiesFolder:GetChildren()) do
-		if not isEnemyAlive(enemy) then
+	for _, instance in ipairs(enemiesFolder:GetChildren()) do
+		if not instance:IsA("Model") or not isEnemyAlive(instance) then
 			continue
 		end
 
-		local root = getRoot(enemy)
+		local root = getRoot(instance)
 
 		if not root then
 			continue
 		end
 
-		local offset = root.Position - origin
-
-		local flatOffset = Vector3.new(
-			offset.X,
-			0,
-			offset.Z
-		)
-
+		local offset = root.Position - position
+		local flatOffset = Vector3.new(offset.X, 0, offset.Z)
 		local distance = flatOffset.Magnitude
 
-		if distance <= 0.01 or distance > range then
+		if distance <= 0.001 or distance > maxRange then
 			continue
 		end
 
-		local enemyDirection = flatOffset.Unit
-		local dot = flatDirection:Dot(enemyDirection)
-
-		if dot >= minimumDot then
-			table.insert(result, enemy)
+		if forward:Dot(flatOffset.Unit) >= minimumDot then
+			table.insert(enemies, instance)
 		end
 	end
 
-	return result
+	return enemies
 end
 
-local function damageEnemy(enemy, damage)
-	if damage <= 0 then
+local function damageEnemy(enemy: Model, damage: number)
+	if isMatchEnded() then
 		return
 	end
 
 	local humanoid = getHumanoid(enemy)
 
-	if not humanoid or humanoid.Health <= 0 then
+	if humanoid and humanoid.Health > 0 then
+		humanoid:TakeDamage(damage)
+	end
+end
+
+local function calculateDamage(unit: Model, ability: AbilityConfig): number
+	local damage = unit:GetAttribute("Damage")
+	local baseDamage = if typeof(damage) == "number" then damage else 0
+
+	return baseDamage * (ability.DamageMultiplier or 1)
+end
+
+local function playVFX(unit: Model, ability: AbilityConfig, position: Vector3)
+	if isMatchEnded() then
 		return
 	end
 
-	humanoid:TakeDamage(damage)
+	vfxEvent:FireAllClients(unit, ability.Name, position, {
+		VFXDuration = ability.VFXDuration,
+		VFXYaw = ability.VFXYaw,
+		SkyHeight = ability.SkyHeight,
+		FallTime = ability.FallTime,
+		ImpactHoldTime = ability.ImpactHoldTime,
+	})
 end
 
-local function calculateDamage(unit, ability)
-	local baseDamage =
-		unit:GetAttribute("Damage")
-		or 10
-
-	local multiplier =
-		ability.DamageMultiplier
-		or 1
-
-	return math.max(
-		0,
-		math.floor(baseDamage * multiplier)
-	)
+local function isCastValid(unit: Model, generation: number): boolean
+	return generation == castGeneration
+		and registeredUnits[unit] == true
+		and unit.Parent ~= nil
+		and not isMatchEnded()
 end
 
-local function playVFX(unit, ability, position)
-	vfxEvent:FireAllClients(
-		unit,
-		ability.Name,
-		position,
-		{
-			VFXDuration = ability.VFXDuration or 1,
-			VFXYaw = ability.VFXYaw or 0,
+local function useTargetAOE(unit: Model, ability: AbilityConfig): boolean
+	if isMatchEnded() then
+		return false
+	end
 
-			SkyHeight = ability.SkyHeight or 30,
-			FallTime = ability.FallTime or 0.65,
-			ImpactHoldTime = ability.ImpactHoldTime or 0.15,
-		}
-	)
-end
-
-local function useTargetAOE(unit, ability)
 	local root = getRoot(unit)
 
 	if not root then
 		return false
 	end
 
-	local range =
-		ability.CastRange
-		or unit:GetAttribute("Range")
-		or 10
+	local range = ability.CastRange or unit:GetAttribute("Range") or 10
 
-	local target = findNearestEnemy(
-		root.Position,
-		range
-	)
+	if typeof(range) ~= "number" then
+		return false
+	end
+
+	local target = findNearestEnemy(root.Position, range)
 
 	if not target then
 		return false
@@ -268,51 +245,36 @@ local function useTargetAOE(unit, ability)
 	faceTarget(unit, target)
 
 	local impactPosition = targetRoot.Position
-
-	playVFX(
-		unit,
-		ability,
-		impactPosition
-	)
-
-	local damage = calculateDamage(
-		unit,
-		ability
-	)
-
+	local damage = calculateDamage(unit, ability)
 	local radius = ability.Radius or 4
 
-	for _, enemy in ipairs(
-		getEnemiesInRadius(
-			impactPosition,
-			radius
-		)
-	) do
-		damageEnemy(
-			enemy,
-			damage
-		)
+	playVFX(unit, ability, impactPosition)
+
+	for _, enemy in ipairs(getEnemiesInRadius(impactPosition, radius)) do
+		damageEnemy(enemy, damage)
 	end
 
 	return true
 end
 
-local function useSkyDrop(unit, ability)
+local function useSkyDrop(unit: Model, ability: AbilityConfig): boolean
+	if isMatchEnded() then
+		return false
+	end
+
 	local root = getRoot(unit)
 
 	if not root then
 		return false
 	end
 
-	local range =
-		ability.CastRange
-		or unit:GetAttribute("Range")
-		or 10
+	local range = ability.CastRange or unit:GetAttribute("Range") or 10
 
-	local target = findNearestEnemy(
-		root.Position,
-		range
-	)
+	if typeof(range) ~= "number" then
+		return false
+	end
+
+	local target = findNearestEnemy(root.Position, range)
 
 	if not target then
 		return false
@@ -327,54 +289,44 @@ local function useSkyDrop(unit, ability)
 	faceTarget(unit, target)
 
 	local impactPosition = targetRoot.Position
-
-	playVFX(
-		unit,
-		ability,
-		impactPosition
-	)
-
-	local damage = calculateDamage(
-		unit,
-		ability
-	)
-
+	local damage = calculateDamage(unit, ability)
 	local radius = ability.Radius or 6
 	local fallTime = ability.FallTime or 0.65
+	local generation = castGeneration
+
+	playVFX(unit, ability, impactPosition)
 
 	task.delay(fallTime, function()
-		for _, enemy in ipairs(
-			getEnemiesInRadius(
-				impactPosition,
-				radius
-			)
-		) do
-			damageEnemy(
-				enemy,
-				damage
-			)
+		if not isCastValid(unit, generation) then
+			return
+		end
+
+		for _, enemy in ipairs(getEnemiesInRadius(impactPosition, radius)) do
+			damageEnemy(enemy, damage)
 		end
 	end)
 
 	return true
 end
 
-local function useCone(unit, ability)
+local function useCone(unit: Model, ability: AbilityConfig): boolean
+	if isMatchEnded() then
+		return false
+	end
+
 	local root = getRoot(unit)
 
 	if not root then
 		return false
 	end
 
-	local range =
-		ability.CastRange
-		or unit:GetAttribute("Range")
-		or 10
+	local range = ability.CastRange or unit:GetAttribute("Range") or 10
 
-	local target = findNearestEnemy(
-		root.Position,
-		range
-	)
+	if typeof(range) ~= "number" then
+		return false
+	end
+
+	local target = findNearestEnemy(root.Position, range)
 
 	if not target then
 		return false
@@ -388,31 +340,16 @@ local function useCone(unit, ability)
 
 	faceTarget(unit, target)
 
-	local direction =
-		targetRoot.Position
-		- root.Position
+	local direction = targetRoot.Position - root.Position
+	local damage = calculateDamage(unit, ability)
+	local coneAngle = ability.ConeAngle or 40
+	local hitDelay = ability.HitDelay or 0
+	local generation = castGeneration
 
-	playVFX(
-		unit,
-		ability,
-		targetRoot.Position
-	)
-
-	local damage = calculateDamage(
-		unit,
-		ability
-	)
-
-	local coneAngle =
-		ability.ConeAngle
-		or 40
-
-	local hitDelay =
-		ability.HitDelay
-		or 0
+	playVFX(unit, ability, targetRoot.Position)
 
 	task.delay(hitDelay, function()
-		if not unit.Parent then
+		if not isCastValid(unit, generation) then
 			return
 		end
 
@@ -422,180 +359,176 @@ local function useCone(unit, ability)
 			return
 		end
 
-		local enemies = getEnemiesInCone(
-			currentRoot.Position,
-			direction,
-			range,
-			coneAngle
-		)
-
-		for _, enemy in ipairs(enemies) do
-			damageEnemy(
-				enemy,
-				damage
+		for _, enemy in ipairs(
+			getEnemiesInCone(
+				currentRoot.Position,
+				direction,
+				range,
+				coneAngle
 			)
+		) do
+			damageEnemy(enemy, damage)
 		end
 	end)
 
 	return true
 end
 
-local abilityHandlers = {
-	TARGET_AOE = useTargetAOE,
-	SKY_DROP = useSkyDrop,
-	CONE = useCone,
+local abilityHandlers: {
+	[string]: (Model, AbilityConfig) -> boolean
+} = {
+	[UnitConfig.AbilityTypes.TargetAOE] = useTargetAOE,
+	[UnitConfig.AbilityTypes.SkyDrop] = useSkyDrop,
+	[UnitConfig.AbilityTypes.Cone] = useCone,
 }
 
-function AbilityService.UseAbility(
-	unit,
-	ability
-)
-	if not unit or not ability then
-		return false
-	end
-
-	local handler =
-		abilityHandlers[ability.Type]
-
-	if not handler then
-		warn(
-			"[AbilityService] Unknown ability type:",
-			ability.Type
-		)
-
-		return false
-	end
-
-	return handler(
-		unit,
-		ability
-	)
+function AbilityService.SetMatchEndedChecker(checker: () -> boolean)
+	matchEndedChecker = checker
 end
 
-function AbilityService.RegisterUnit(unit)
-	if not unit:IsA("Model") then
+function AbilityService.UseAbility(unit: Model, ability: AbilityConfig): boolean
+	if isMatchEnded() then
+		return false
+	end
+
+	local handler = abilityHandlers[ability.Type]
+
+	if not handler then
+		warn(`[AbilityService] Unknown ability type: {ability.Type}`)
+		return false
+	end
+
+	return handler(unit, ability)
+end
+
+function AbilityService.RegisterUnit(unit: Model)
+	if registeredUnits[unit] or isMatchEnded() then
 		return
 	end
 
-	if registeredUnits[unit] then
-		return
-	end
+	local unitData = UnitConfig.GetAlly(unit.Name)
 
-	local unitData =
-		UnitConfig.Allies[unit.Name]
-
-	if not unitData then
-		return
-	end
-
-	local abilities =
-		unitData.Abilities
-
-	if not abilities or #abilities == 0 then
+	if not unitData or #unitData.Abilities == 0 then
 		return
 	end
 
 	registeredUnits[unit] = true
+	unit:SetAttribute("AbilitySystemHooked", true)
 
 	task.spawn(function()
-		local humanoid
-		local root
+		local humanoid: Humanoid? = nil
+		local root: BasePart? = nil
+		local startedAt = os.clock()
 
-		local started = os.clock()
-
-		while
-			unit.Parent
-			and os.clock() - started < 5
+		while registeredUnits[unit]
+			and unit.Parent
+			and not isMatchEnded()
+			and os.clock() - startedAt < 5
 		do
 			humanoid = getHumanoid(unit)
 			root = getRoot(unit)
 
-			if
-				humanoid
-				and root
-				and unit:GetAttribute("Damage") ~= nil
-			then
+			if humanoid and root and unit:GetAttribute("Damage") ~= nil then
 				break
 			end
 
 			task.wait(0.05)
 		end
 
-		if
-			not unit.Parent
-			or not humanoid
+		if not humanoid
 			or not root
+			or not registeredUnits[unit]
+			or isMatchEnded()
 		then
-			registeredUnits[unit] = nil
+			AbilityService.UnregisterUnit(unit)
 			return
 		end
 
-		local lastUsed = {}
+		local lastUsed: {[number]: number} = {}
 
-		for index in ipairs(abilities) do
+		for index in ipairs(unitData.Abilities) do
 			lastUsed[index] = 0
 		end
 
-		while
-			unit.Parent
+		while registeredUnits[unit]
+			and unit.Parent
 			and humanoid.Health > 0
+			and not isMatchEnded()
 		do
 			task.wait(THINK_RATE)
 
-			local now =
-				workspace:GetServerTimeNow()
+			if not registeredUnits[unit] or isMatchEnded() then
+				break
+			end
 
-			for index, ability in ipairs(abilities) do
-				local cooldown =
-					ability.Cooldown
-					or 1
+			local now = workspace:GetServerTimeNow()
 
-				if
-					now - lastUsed[index]
-					< cooldown
-				then
+			for index, ability in ipairs(unitData.Abilities) do
+				if now - lastUsed[index] < ability.Cooldown then
 					continue
 				end
 
-				local success =
-					AbilityService.UseAbility(
-						unit,
-						ability
-					)
-
-				if success then
+				if AbilityService.UseAbility(unit, ability) then
 					lastUsed[index] = now
 					break
 				end
 			end
 		end
 
-		registeredUnits[unit] = nil
+		AbilityService.UnregisterUnit(unit)
 	end)
 end
 
-function AbilityService.UnregisterUnit(unit)
+function AbilityService.UnregisterUnit(unit: Model)
+	if not registeredUnits[unit] then
+		return
+	end
+
 	registeredUnits[unit] = nil
+
+	if unit.Parent then
+		unit:SetAttribute("AbilitySystemHooked", false)
+	end
+end
+
+function AbilityService.CancelAll()
+	castGeneration += 1
+
+	local unitsToRemove: {Model} = {}
+
+	for unit in pairs(registeredUnits) do
+		table.insert(unitsToRemove, unit)
+	end
+
+	for _, unit in ipairs(unitsToRemove) do
+		AbilityService.UnregisterUnit(unit)
+	end
 end
 
 function AbilityService.Init()
-	for _, unit in ipairs(
-		alliesFolder:GetChildren()
-	) do
-		AbilityService.RegisterUnit(unit)
+	if initialized then
+		return
 	end
 
-	alliesFolder.ChildAdded:Connect(
-		function(unit)
-			AbilityService.RegisterUnit(unit)
-		end
-	)
+	initialized = true
 
-	alliesFolder.ChildRemoved:Connect(
-		function(unit)
-			AbilityService.UnregisterUnit(unit)
+	for _, instance in ipairs(alliesFolder:GetChildren()) do
+		if instance:IsA("Model") then
+			AbilityService.RegisterUnit(instance)
 		end
-	)
+	end
+
+	alliesFolder.ChildAdded:Connect(function(instance)
+		if instance:IsA("Model") then
+			AbilityService.RegisterUnit(instance)
+		end
+	end)
+
+	alliesFolder.ChildRemoved:Connect(function(instance)
+		if instance:IsA("Model") then
+			AbilityService.UnregisterUnit(instance)
+		end
+	end)
 end
 
 return AbilityService
